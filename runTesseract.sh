@@ -1,1 +1,1 @@
-tesseract $1 $1 config
+tesseract $1 $1 tess_config
