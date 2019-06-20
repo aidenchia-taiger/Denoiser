@@ -18,7 +18,7 @@ def main():
 
 	denoiser = Denoiser()
 	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
-	#denoiser.denoise(img)
+	denoiser.denoise(img)
 
 	#img = binarize(img, args.binarize)
 	#img = despeckle(img)
@@ -35,9 +35,19 @@ class Denoiser:
 			img = self.cropTextBbox(img)
 
 		if self.config['DESPECKLE']:
-			img = self.despeckle(img)
+			img = self.despeckle(img, self.config['DILATION KERNEL SIZE'], \
+									  self.config['DILATION ITERATIONS'], \
+									  self.config['EROSION KERNEL SIZE'], \
+									  self.config['EROSION ITERATIONS'])
 
-		self.display(img)
+		if self.config['BINARIZE']:
+			img = self.binarize(img, self.config['BINARIZATION METHOD'])
+
+		if self.config['DESHADOW']:
+			img = self.deshadow(img, self.config['MAX KERNEL'], self.config['MEDIAN KERNEL'])
+
+		if self.config['DISPLAY']:
+			self.display(img)
 
 	def read_config(self, config):
 		dic = {}
@@ -45,21 +55,26 @@ class Denoiser:
 			line = line.strip().split()
 			if line[0] == 'DESPECKLE':
 				dic[line[0]] = True if line[1] == 'T' else line[1] == False
-				dic['DILATION KERNEL SIZE'] = line[2]
-				dic['DILATION ITERATIONS'] = line[3]
-				dic['EROSION KERNEL SIZE'] = line[4]
-				dic['EROSION ITERATIONS'] = line[5]
+				dic['DILATION KERNEL SIZE'] = int(line[2])
+				dic['DILATION ITERATIONS'] = int(line[3])
+				dic['EROSION KERNEL SIZE'] = int(line[4])
+				dic['EROSION ITERATIONS'] = int(line[5])
 
 			elif line[0] == 'BINARIZE':
 				dic[line[0]] = True if line[1] == 'T' else line[1] == False
-				if line[2] == 0: 
+				if line[2] == str(0): 
 					dic['BINARIZATION METHOD'] = 'global'
 
-				elif line[2] == 1:
+				elif line[2] == str(1):
 					dic['BINARIZATION METHOD'] = 'adaptive'
 
 				else:
-					dic['BINARIZATION METHOD'] = 'adaptive'
+					dic['BINARIZATION METHOD'] = 'otsu'
+
+			elif line[0] == 'DESHADOW':
+				dic[line[0]] = True if line[1] == 'T' else line[1] == False
+				dic['MAX KERNEL'] = int(line[2])
+				dic['MEDIAN KERNEL'] = int(line[3])
 			
 			else:
 				dic[line[0]] = True if line[1] == 'T' else line[1] == False
@@ -85,8 +100,6 @@ class Denoiser:
 		sigma = np.sum(np.sum(np.absolute(convolve2d(img, M))))
 		sigma = sigma * math.sqrt(0.5 * math.pi) / (6 * (W-2) * (H-2))
 		return sigma
-
-
 
 	###############################################
 	def binarize(self, img, method='otsu', gthreshold=127):
