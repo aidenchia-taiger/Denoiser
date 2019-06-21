@@ -12,25 +12,44 @@ import pdb
 
 def main():
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--i', help="path to input image", default="test.png")
-	parser.add_argument('--o', help="save binarized image", default="test_denoised.png")
+	parser.add_argument('--i', help="path to input image", default="test2.png")
+	parser.add_argument('--o', help="save binarized image", default=None)
 	args = parser.parse_args()
 
 	denoiser = Denoiser()
 	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
-	denoiser.denoise(img)
+	denoised = denoiser.denoise(img)
+	if denoiser.config['DISPLAY']:
+		display(img, denoised, True) if denoiser.config['HIST'] else display(img, denoised, False)
 
-	#img = binarize(img, args.binarize)
-	#img = despeckle(img)
-	#display(img)
-	#cv2.imwrite('out/' + args.o, img)
-	#print('[INFO] Denoised image written to out/{}'.format(args.o))
+	if args.o:
+		cv2.imwrite('out/' + args.o, denoised)
+
+def display(img, denoised, hist=False):
+	plt.rcParams["figure.figsize"] = [12, 9]
+	
+	if hist:
+		fig, axes = plt.subplots(2,2, tight_layout=True)
+		ax0, ax1, ax2, ax3 = axes.flatten()
+		ax0.imshow(img, 'gray')
+		ax1.imshow(denoised, 'gray')
+		ax2.hist(img.ravel(), 256, [0,256])
+		ax3.hist(denoised.ravel(), 256, [0,256])
+
+	else:
+		fig, axes = plt.subplots(1,2, tight_layout=True)
+		ax0, ax1 = axes.flatten()
+		ax0.imshow(img, 'gray')
+		ax1.imshow(denoised, 'gray')
+
+	plt.show()
 
 class Denoiser:
 	def __init__(self):
 		self.config = self.read_config(open('config.txt'))
 
 	def denoise(self, img):
+		self.cropBackground(img)
 		if self.config['CROPTEXT']:
 			img = self.cropTextBbox(img)
 
@@ -40,28 +59,42 @@ class Denoiser:
 									  self.config['EROSION KERNEL SIZE'], \
 									  self.config['EROSION ITERATIONS'])
 
-		if self.config['BINARIZE']:
-			img = self.binarize(img, self.config['BINARIZATION METHOD'])
+
 
 		if self.config['DESHADOW']:
 			img = self.deshadow(img, self.config['MAX KERNEL'], self.config['MEDIAN KERNEL'])
 
-		if self.config['DISPLAY']:
-			self.display(img)
+		if self.config['BLUR']:
+			img = self.blur(img, 'bilateral')
+
+		if self.config['CONTRAST']:
+			img = self.increaseContrast(img)
+
+		if self.config['GRADIENT']:
+			img = self.gradient(img, self.config['GRADIENT KERNEL SIZE'])
+
+		if self.config['CLOSING']:
+			img = self.closing(img, self.config['CLOSING KERNEL SIZE'])
+
+		if self.config['BINARIZE']:
+			img = self.binarize(img, self.config['BINARIZATION METHOD'])
+		
+		return img
 
 	def read_config(self, config):
 		dic = {}
 		for line in config:
 			line = line.strip().split()
 			if line[0] == 'DESPECKLE':
-				dic[line[0]] = True if line[1] == 'T' else line[1] == False
+				dic[line[0]] = True if line[1] == 'T' else False
 				dic['DILATION KERNEL SIZE'] = int(line[2])
 				dic['DILATION ITERATIONS'] = int(line[3])
 				dic['EROSION KERNEL SIZE'] = int(line[4])
 				dic['EROSION ITERATIONS'] = int(line[5])
+				self.printIfTrue(line[0], dic, 'DILATION KERNEL SIZE', 'DILATION ITERATIONS', 'EROSION KERNEL SIZE', 'EROSION ITERATIONS')
 
 			elif line[0] == 'BINARIZE':
-				dic[line[0]] = True if line[1] == 'T' else line[1] == False
+				dic[line[0]] = True if line[1] == 'T' else False
 				if line[2] == str(0): 
 					dic['BINARIZATION METHOD'] = 'global'
 
@@ -70,23 +103,55 @@ class Denoiser:
 
 				else:
 					dic['BINARIZATION METHOD'] = 'otsu'
+				self.printIfTrue(line[0], dic,'BINARIZATION METHOD')
 
 			elif line[0] == 'DESHADOW':
-				dic[line[0]] = True if line[1] == 'T' else line[1] == False
+				dic[line[0]] = True if line[1] == 'T' else False
 				dic['MAX KERNEL'] = int(line[2])
 				dic['MEDIAN KERNEL'] = int(line[3])
+				self.printIfTrue(line[0], dic, 'MAX KERNEL', 'MEDIAN KERNEL')
 			
+			elif line[0] == 'BLUR':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['BLURRING KERNEL SIZE'] = int(line[2])
+
+				if line[3] == str(0):
+					dic['BLURRING METHOD'] = 'average'
+				elif line[3] == str(1):
+					dic['BLURRING METHOD'] = 'median'
+				elif line[3] == str(2):
+					dic['BLURRING METHOD'] = 'gaussian'
+				elif line[3] == str(3):
+					dic['BLURRING METHOD'] = 'bilateral'
+				self.printIfTrue(line[0], dic, 'BLURRING METHOD')
+			
+			elif line[0] == 'DISPLAY':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['HIST'] = True if line[2] == 'T' else False
+				self.printIfTrue(line[0], dic, 'HIST')
+
+			elif line[0] == 'GRADIENT':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['GRADIENT KERNEL SIZE'] = int(line[2])
+				self.printIfTrue(line[0], dic, 'GRADIENT KERNEL SIZE')
+
+			elif line[0] == 'CLOSING':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['CLOSING KERNEL SIZE'] = int(line[2])
+				self.printIfTrue(line[0], dic, 'CLOSING KERNEL SIZE')
+
 			else:
-				dic[line[0]] = True if line[1] == 'T' else line[1] == False
+				dic[line[0]] = True if line[1] == 'T' else False
+				self.printIfTrue(line[0], dic)
 			
-		for k,v in dic.items():
-			print('{}: {}'.format(k,v))
 		return dic
 
-	def display(self, img, window=''):
-		img = cv2.resize(img, (1000, 1000))
-		cv2.imshow(window, img)
-		cv2.waitKey(0)
+	def printIfTrue(self, method, dic, *params):
+		if dic[method]:
+			print('{}: {}'.format(method, dic[method]))
+			for param in params:
+				print('{}: {}'.format(param, dic[param]))
+
 
 	def estimate_noise(self, img):
 		if len(img.shape) == 3:
@@ -105,15 +170,47 @@ class Denoiser:
 	def binarize(self, img, method='otsu', gthreshold=127):
 		# adaptive and Otsu requires image to be grayscale
 		if method == 'global':
-			_, img = cv2.threshold(img, gthreshold, 255, cv2.THRESH_BINARY)
+			_, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
 
 		elif method == 'adaptive':
-			img = cv2.adaptiveThreshold(src=img, dst=img, maxValue=255, adaptiveMethod=cv2.ADAPTIVE_THRESH_MEAN_C, \
-								   thresholdType=cv2.THRESH_BINARY, blockSize=5, C=2)
+			img = cv2.adaptiveThreshold(src=img, dst=img, maxValue=255, \
+										adaptiveMethod=cv2.ADAPTIVE_THRESH_GAUSSIAN_C, \
+								   		thresholdType=cv2.THRESH_BINARY, blockSize=21, C=2)
 
 		elif method == 'otsu':
 			_, img = cv2.threshold(img, 0, 255, cv2.THRESH_OTSU)
 
+		return img
+
+	###############################################
+	def cropBackground(self, img):
+		imgArea = img.shape[0] * img.shape[1]
+		th, threshed = cv2.threshold(img, 240, 255, cv2.THRESH_BINARY_INV)
+
+		## (2) Morph-op to remove noise
+		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
+		morphed = cv2.morphologyEx(threshed, cv2.MORPH_CLOSE, kernel)
+
+		## (3) Find the max-area contour
+		cnts = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
+		cnt = sorted(cnts, key=cv2.contourArea, reverse=True)
+		for idx in range(len(cnt)):
+			x,y,w,h = cv2.boundingRect(cnt[idx])
+			if w*h / imgArea < 0.1:
+				continue
+			dst = img[y:y+h, x:x+w]
+			cv2.imwrite('crop{}.png'.format(idx), dst)
+
+	###############################################
+	def gradient(self, img, kernelSize):
+		kernel = np.ones((kernelSize,kernelSize),np.uint8)
+		img = cv2.morphologyEx(img, cv2.MORPH_GRADIENT, kernel)
+		return img
+
+	###############################################
+	def closing(self, img, kernelSize):
+		kernel = np.ones((kernelSize,kernelSize),np.uint8)
+		img =  cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
 		return img
 
 	###############################################
@@ -147,7 +244,7 @@ class Denoiser:
 		white[white==0] = 255
 
 		# If fail to find any contours, return the original image
-		print('[INFO] No. of contours found: {}'.format(len(contours)))
+		#print('[INFO] No. of contours found: {}'.format(len(contours)))
 		if len(contours) == 0:
 			return bw
 
@@ -179,6 +276,25 @@ class Denoiser:
 	    
 	    #display(img)
 	    return diff_img
+
+	###############################################
+	def blur(self, img, method, kernelSize=3):
+		if method == 'average':
+			img = cv2.blur(img, (kernelSize, kernelSize))
+
+		elif method == 'median':
+			img = cv2.medianBlur(img, kernelSize)
+
+		elif method == 'gaussian':
+			img = cv2.GaussianBlur(img, (kernelSize, kernelSize), 0)
+
+		elif method == 'bilateral':
+			img = cv2.bilateralFilter(img, 9, 150, 150)
+
+		return img
+	###############################################
+	def increaseContrast(self, img):
+		return cv2.equalizeHist(img)
 
 if __name__ == '__main__':
 	main()
