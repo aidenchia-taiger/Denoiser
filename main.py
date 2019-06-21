@@ -49,6 +49,7 @@ class Denoiser:
 		self.config = self.read_config(open('config.txt'))
 
 	def denoise(self, img):
+
 		self.cropBackground(img)
 		if self.config['CROPTEXT']:
 			img = self.cropTextBbox(img)
@@ -78,6 +79,12 @@ class Denoiser:
 
 		if self.config['BINARIZE']:
 			img = self.binarize(img, self.config['BINARIZATION METHOD'])
+
+		if self.config['CROPBACKGROUND']:
+			self.cropBackground(img)
+
+		if self.config['OPENING']:
+			img = self.opening(img, self.config['OPENING KERNEL SIZE'])
 		
 		return img
 
@@ -140,6 +147,11 @@ class Denoiser:
 				dic['CLOSING KERNEL SIZE'] = int(line[2])
 				self.printIfTrue(line[0], dic, 'CLOSING KERNEL SIZE')
 
+			elif line[0] == 'OPENING':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['OPENING KERNEL SIZE'] = int(line[2])
+				self.printIfTrue(line[0], dic, 'OPENING KERNEL SIZE')
+
 			else:
 				dic[line[0]] = True if line[1] == 'T' else False
 				self.printIfTrue(line[0], dic)
@@ -194,12 +206,16 @@ class Denoiser:
 		## (3) Find the max-area contour
 		cnts = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
 		cnt = sorted(cnts, key=cv2.contourArea, reverse=True)
+		numCrops = 0
 		for idx in range(len(cnt)):
 			x,y,w,h = cv2.boundingRect(cnt[idx])
-			if w*h / imgArea < 0.1:
+			if w*h / imgArea < 0.05:
 				continue
 			dst = img[y:y+h, x:x+w]
-			cv2.imwrite('crop{}.png'.format(idx), dst)
+			cv2.imwrite('out/crop{}.png'.format(idx), dst)
+			numCrops +=1
+
+		return numCrops
 
 	###############################################
 	def gradient(self, img, kernelSize):
@@ -262,6 +278,16 @@ class Denoiser:
 		#cv2.imwrite('cropped2.png', white)
 		return white
 
+	###############################################
+	def tophat(self, img, kernelSize):
+		kernel = np.ones((kernelSize, kernelSize), np.uint8)
+		return cv2.morphologyEx(img, cv2.MORPH_TOPHAT, kernel)
+
+	###############################################
+	def opening(self, img, kernelSize):
+		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernelSize, kernelSize))
+		return cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+	
 	###############################################
 	def deshadow(self, img, maxKernel=10, medianKernel=17):
 
