@@ -49,27 +49,17 @@ class Denoiser:
 		self.config = self.read_config(open('config.txt'))
 
 	def denoise(self, img):
-
-		self.cropBackground(img)
-		if self.config['CROPTEXT']:
-			img = self.cropTextBbox(img)
-
-		if self.config['DESPECKLE']:
-			img = self.despeckle(img, self.config['DILATION KERNEL SIZE'], \
-									  self.config['DILATION ITERATIONS'], \
-									  self.config['EROSION KERNEL SIZE'], \
-									  self.config['EROSION ITERATIONS'])
-
-
-
 		if self.config['DESHADOW']:
 			img = self.deshadow(img, self.config['MAX KERNEL'], self.config['MEDIAN KERNEL'])
 
-		if self.config['BLUR']:
-			img = self.blur(img, 'bilateral')
+		if self.config['CROPBACKGROUND']:
+			self.cropBackground(img, self.config['MIN AREA PERCENTAGE'])
 
-		if self.config['CONTRAST']:
-			img = self.increaseContrast(img)
+		if self.config['SHARPEN']:
+			img = self.sharpen(img)
+
+		if self.config['TOPHAT']:
+			img = self.tophat(img, self.config['TOPHAT KERNEL SIZE'])
 
 		if self.config['GRADIENT']:
 			img = self.gradient(img, self.config['GRADIENT KERNEL SIZE'])
@@ -77,14 +67,23 @@ class Denoiser:
 		if self.config['CLOSING']:
 			img = self.closing(img, self.config['CLOSING KERNEL SIZE'])
 
-		if self.config['BINARIZE']:
-			img = self.binarize(img, self.config['BINARIZATION METHOD'])
+		if self.config['BLUR']:
+			img = self.blur(img, 'bilateral')
 
-		if self.config['CROPBACKGROUND']:
-			self.cropBackground(img)
+		if self.config['CONTRAST']:
+			img = self.increaseContrast(img)
 
 		if self.config['OPENING']:
 			img = self.opening(img, self.config['OPENING KERNEL SIZE'])
+
+		if self.config['EROSION']:
+			img = self.erosion(img, self.config['EROSION KERNEL SIZE'], self.config['EROSION ITERATIONS'])
+
+		if self.config['BINARIZE']:
+			img = self.binarize(img, self.config['BINARIZATION METHOD'])
+
+		if self.config['CROPTEXT']:
+			img = self.cropTextBbox(img)
 		
 		return img
 
@@ -92,15 +91,8 @@ class Denoiser:
 		dic = {}
 		for line in config:
 			line = line.strip().split()
-			if line[0] == 'DESPECKLE':
-				dic[line[0]] = True if line[1] == 'T' else False
-				dic['DILATION KERNEL SIZE'] = int(line[2])
-				dic['DILATION ITERATIONS'] = int(line[3])
-				dic['EROSION KERNEL SIZE'] = int(line[4])
-				dic['EROSION ITERATIONS'] = int(line[5])
-				self.printIfTrue(line[0], dic, 'DILATION KERNEL SIZE', 'DILATION ITERATIONS', 'EROSION KERNEL SIZE', 'EROSION ITERATIONS')
 
-			elif line[0] == 'BINARIZE':
+			if line[0] == 'BINARIZE':
 				dic[line[0]] = True if line[1] == 'T' else False
 				if line[2] == str(0): 
 					dic['BINARIZATION METHOD'] = 'global'
@@ -108,8 +100,11 @@ class Denoiser:
 				elif line[2] == str(1):
 					dic['BINARIZATION METHOD'] = 'adaptive'
 
-				else:
+				elif line[2] == str(2):
 					dic['BINARIZATION METHOD'] = 'otsu'
+
+				elif line[2] == str(3):
+					dic['BINARIZATION METHOD'] = 'inv'
 				self.printIfTrue(line[0], dic,'BINARIZATION METHOD')
 
 			elif line[0] == 'DESHADOW':
@@ -152,6 +147,33 @@ class Denoiser:
 				dic['OPENING KERNEL SIZE'] = int(line[2])
 				self.printIfTrue(line[0], dic, 'OPENING KERNEL SIZE')
 
+			elif line[0] =='EROSION':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['EROSION KERNEL SIZE'] = int(line[2])
+				dic['EROSION ITERATIONS'] = int(line[3])
+				self.printIfTrue(line[0], dic, 'EROSION KERNEL SIZE', 'EROSION ITERATIONS')
+
+			elif line[0] == 'CROPBACKGROUND':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['MIN AREA PERCENTAGE'] = int(line[2])
+				self.printIfTrue(line[0], dic, 'MIN AREA PERCENTAGE')
+
+			elif line[0] == 'TOPHAT':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['TOPHAT KERNEL SIZE'] = int(line[2])
+				self.printIfTrue(line[0], dic, 'TOPHAT KERNEL SIZE')
+
+			elif line[0] == 'SHARPEN':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['SHARPEN IMG'] = float(line[2])
+				dic['BLUR IMG'] = float(line[3])
+				self.printIfTrue(line[0], dic, 'SHARPEN IMG', 'BLUR IMG')
+
+			elif line[0] == 'CONTRAST':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['CONTRAST METHOD'] = 'global' if line[2] == str(0) else 'adaptive'
+				self.printIfTrue(line[0], dic, 'CONTRAST METHOD')
+
 			else:
 				dic[line[0]] = True if line[1] == 'T' else False
 				self.printIfTrue(line[0], dic)
@@ -179,7 +201,7 @@ class Denoiser:
 		return sigma
 
 	###############################################
-	def binarize(self, img, method='otsu', gthreshold=127):
+	def binarize(self, img, method='otsu', gthreshold=120):
 		# adaptive and Otsu requires image to be grayscale
 		if method == 'global':
 			_, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
@@ -192,35 +214,42 @@ class Denoiser:
 		elif method == 'otsu':
 			_, img = cv2.threshold(img, 0, 255, cv2.THRESH_OTSU)
 
+		elif method == 'inv':
+			_, img = cv2.threshold(img, 10, 255, cv2.THRESH_BINARY_INV)
+
 		return img
 
 	###############################################
-	def cropBackground(self, img):
+	def cropBackground(self, img, minArea=5):
 		imgArea = img.shape[0] * img.shape[1]
 		th, threshed = cv2.threshold(img, 240, 255, cv2.THRESH_BINARY_INV)
 
 		## (2) Morph-op to remove noise
-		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
+		kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11,11))
 		morphed = cv2.morphologyEx(threshed, cv2.MORPH_CLOSE, kernel)
 
 		## (3) Find the max-area contour
 		cnts = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
 		cnt = sorted(cnts, key=cv2.contourArea, reverse=True)
-		numCrops = 0
 		for idx in range(len(cnt)):
 			x,y,w,h = cv2.boundingRect(cnt[idx])
-			if w*h / imgArea < 0.05:
+			if w*h / imgArea < minArea / 100:
 				continue
 			dst = img[y:y+h, x:x+w]
 			cv2.imwrite('out/crop{}.png'.format(idx), dst)
-			numCrops +=1
 
-		return numCrops
+		return
 
 	###############################################
 	def gradient(self, img, kernelSize):
 		kernel = np.ones((kernelSize,kernelSize),np.uint8)
 		img = cv2.morphologyEx(img, cv2.MORPH_GRADIENT, kernel)
+		return img
+
+	###############################################
+	def sharpen(self, img, sharpenImg=1.5, blurImg=-0.5):
+		blur = self.blur(img, 'gaussian')
+		img = cv2.addWeighted(img, sharpenImg, blur, blurImg, 0)
 		return img
 
 	###############################################
@@ -230,12 +259,9 @@ class Denoiser:
 		return img
 
 	###############################################
-	def despeckle(self, img, dKernel=2, dIterations=2, eKernel=1, eIterations=1):
-		dKernel = np.ones((dKernel, dKernel), np.uint8)
-		dilation = cv2.dilate(img, dKernel, iterations = dIterations) # makes white grow
+	def erosion(self, img, eKernel,eIterations):
 		eKernel = np.ones((eKernel, eKernel), np.uint8)
-		erosion = cv2.erode(dilation, eKernel, iterations = eIterations) # makes black grow
-		return erosion
+		return cv2.erode(img, eKernel, eIterations)
 
 	###############################################
 	def cropTextBbox(self, img):
@@ -246,7 +272,7 @@ class Denoiser:
 		grad = cv2.morphologyEx(rgb, cv2.MORPH_GRADIENT, kernel)
 
 		_, bw = cv2.threshold(grad, 0.0, 255.0, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-
+		#cv2.imwrite('grad.png', grad)
 		kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1))
 		connected = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
 
@@ -283,7 +309,7 @@ class Denoiser:
 		kernel = np.ones((kernelSize, kernelSize), np.uint8)
 		return cv2.morphologyEx(img, cv2.MORPH_TOPHAT, kernel)
 
-	###############################################
+	#############################	##################
 	def opening(self, img, kernelSize):
 		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernelSize, kernelSize))
 		return cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
@@ -300,7 +326,6 @@ class Denoiser:
 	    norm_img = np.empty(diff_img.shape)
 	    norm_img = cv2.normalize(diff_img, dst=norm_img, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1) # Normalize pixels
 	    
-	    #display(img)
 	    return diff_img
 
 	###############################################
@@ -317,10 +342,18 @@ class Denoiser:
 		elif method == 'bilateral':
 			img = cv2.bilateralFilter(img, 9, 150, 150)
 
+		elif method == 'max':
+			img = cv2.maximum_filter(img, (kernelSize, kernelSize))
+
 		return img
 	###############################################
-	def increaseContrast(self, img):
-		return cv2.equalizeHist(img)
+	def increaseContrast(self, img, method='global'):
+		if method == 'global':
+			return cv2.equalizeHist(img)
+		elif method == 'adaptive':
+			clahe = cv2.createCLAHE()
+			img = clahe.apply(img)
+			return img
 
 if __name__ == '__main__':
 	main()
