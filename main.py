@@ -18,11 +18,11 @@ def main():
 
 	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
 	denoiser = Denoiser()
-	denoiser.build_pipeline(img)
+	denoiser.denoise(img)
 	
-	denoised = denoiser.denoise(img)
-	if denoiser.config['DISPLAY']:
-		display(img, denoised, True) if denoiser.config['HIST'] else display(img, denoised, False)
+	denoised = denoiser.denoise(img, userconfig=True)
+	if True:
+		display(img, denoised, True)
 
 	if args.o:
 		cv2.imwrite('out/' + args.o, denoised)
@@ -47,10 +47,8 @@ def display(img, denoised, hist=False):
 	plt.show()
 
 class Denoiser:
-	def __init__(self, config='userconfig.txt'):
-		self.config = self.read_config(open(config))
-
-	def denoise(self, img):
+	def denoise_by_user_config(self, img):
+		self.config = self.read_config(open('userconfig.txt'))
 		if self.config['DESHADOW']:
 			img = self.deshadow(img, self.config['MAX KERNEL'], self.config['MEDIAN KERNEL'])
 
@@ -213,7 +211,10 @@ class Denoiser:
 		numWhite = (img == 255).sum()
 		return numBlack * 100 / numWhite
 
-	def build_pipeline(self, img):
+	def denoise(self, img, userconfig=False):
+		if userconfig:
+			return self.denoise_by_user_config(img)
+
 		f = open('config.txt', 'w+')
 
 		'TODO: if (shadow): deshadow'
