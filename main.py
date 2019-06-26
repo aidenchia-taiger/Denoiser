@@ -5,7 +5,7 @@ import argparse
 from scipy.ndimage.filters import maximum_filter
 from PIL import Image
 import matplotlib.pyplot as plt
-from skimage.restoration import estimate_sigma
+from skimage.restoration import denoise_wavelet
 from scipy.signal import convolve2d
 import math
 import pdb
@@ -16,8 +16,10 @@ def main():
 	parser.add_argument('--o', help="save binarized image", default=None)
 	args = parser.parse_args()
 
-	denoiser = Denoiser()
 	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
+	denoiser = Denoiser()
+	denoiser.build_pipeline(img)
+	
 	denoised = denoiser.denoise(img)
 	if denoiser.config['DISPLAY']:
 		display(img, denoised, True) if denoiser.config['HIST'] else display(img, denoised, False)
@@ -45,18 +47,24 @@ def display(img, denoised, hist=False):
 	plt.show()
 
 class Denoiser:
-	def __init__(self):
-		self.config = self.read_config(open('config.txt'))
+	def __init__(self, config='userconfig.txt'):
+		self.config = self.read_config(open(config))
 
 	def denoise(self, img):
 		if self.config['DESHADOW']:
 			img = self.deshadow(img, self.config['MAX KERNEL'], self.config['MEDIAN KERNEL'])
 
+		if self.config['CONTRAST']:
+			img = self.increaseContrast(img)
+
 		if self.config['CROPBACKGROUND']:
-			self.cropBackground(img, self.config['MIN AREA PERCENTAGE'])
+			img = self.cropBackground(img, self.config['MIN AREA PERCENTAGE'])
 
 		if self.config['SHARPEN']:
 			img = self.sharpen(img)
+
+		if self.config['WAVELET']:
+			img = self.wavelet(img, self.config['WAVELET SIGMA'])
 
 		if self.config['TOPHAT']:
 			img = self.tophat(img, self.config['TOPHAT KERNEL SIZE'])
@@ -70,21 +78,23 @@ class Denoiser:
 		if self.config['BLUR']:
 			img = self.blur(img, 'bilateral')
 
-		if self.config['CONTRAST']:
-			img = self.increaseContrast(img)
-
 		if self.config['OPENING']:
 			img = self.opening(img, self.config['OPENING KERNEL SIZE'])
 
 		if self.config['EROSION']:
-			img = self.erosion(img, self.config['EROSION KERNEL SIZE'], self.config['EROSION ITERATIONS'])
+			img = self.erosion(img, self.config['EROSION KERNEL SIZE'], \
+									self.config['EROSION ITERATIONS'])
+
+		if self.config['DILATION']:
+			img = self.dilation(img, self.config['DILATION KERNEL SIZE'], \
+									 self.config['DILATION ITERATIONS'])
 
 		if self.config['BINARIZE']:
 			img = self.binarize(img, self.config['BINARIZATION METHOD'])
 
 		if self.config['CROPTEXT']:
 			img = self.cropTextBbox(img)
-		
+
 		return img
 
 	def read_config(self, config):
@@ -125,6 +135,8 @@ class Denoiser:
 					dic['BLURRING METHOD'] = 'gaussian'
 				elif line[3] == str(3):
 					dic['BLURRING METHOD'] = 'bilateral'
+				elif line[3] == str(4):
+					dic['BLURRING METHOD'] = 'max'
 				self.printIfTrue(line[0], dic, 'BLURRING METHOD')
 			
 			elif line[0] == 'DISPLAY':
@@ -152,6 +164,12 @@ class Denoiser:
 				dic['EROSION KERNEL SIZE'] = int(line[2])
 				dic['EROSION ITERATIONS'] = int(line[3])
 				self.printIfTrue(line[0], dic, 'EROSION KERNEL SIZE', 'EROSION ITERATIONS')
+
+			elif line[0] =='DILATION':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['DILATION KERNEL SIZE'] = int(line[2])
+				dic['DILATION ITERATIONS'] = int(line[3])
+				self.printIfTrue(line[0], dic, 'DILATION KERNEL SIZE', 'DILATION ITERATIONS')
 
 			elif line[0] == 'CROPBACKGROUND':
 				dic[line[0]] = True if line[1] == 'T' else False
@@ -186,22 +204,38 @@ class Denoiser:
 			for param in params:
 				print('{}: {}'.format(param, dic[param]))
 
+	def is_binary(self, img):
+		return np.array_equal(np.unique(img), np.array([0, 255]))
 
-	def estimate_noise(self, img):
-		if len(img.shape) == 3:
-			img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-		H, W = img.shape
+	def percentageBlack(self, img):
+		img = self.binarize(img, 'global' ,127)
+		numBlack = (img == 0).sum()
+		numWhite = (img == 255).sum()
+		return numBlack * 100 / numWhite
 
-		M = [[1, -2, 1],
-			 [-2, 4, -2],
-		     [1, -2, 1]]
+	def build_pipeline(self, img):
+		f = open('config.txt', 'w+')
 
-		sigma = np.sum(np.sum(np.absolute(convolve2d(img, M))))
-		sigma = sigma * math.sqrt(0.5 * math.pi) / (6 * (W-2) * (H-2))
-		return sigma
+		'TODO: if (shadow): deshadow'
+		'TODO: how to distinguish other bg object?'
+		'TODO: how to remove black border?'
+
+		if 100 - self.percentageBlack(img) > 55: # there is likely a large white border surrounding area of interest
+			f.write('CROPBACKGROUND T 5\n')
+			img = self.cropBackground(img)
+
+		if self.percentageBlack(img) > 40: # img likely has high density of pepper noise
+			f.write('CLOSING T 3\n')
+
+		if self.percentageBlack(img) > 15: # img has moderate density of pepper noise
+			f.write('BLUR T 12 2\n') # median blur
+			f.write('BINARIZE T 2\n') # Otsu binarization
+
+		f.write('CROPTEXT T\n')
+		f.close()
 
 	###############################################
-	def binarize(self, img, method='otsu', gthreshold=120):
+	def binarize(self, img, method='otsu', gthreshold=127):
 		# adaptive and Otsu requires image to be grayscale
 		if method == 'global':
 			_, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
@@ -231,20 +265,30 @@ class Denoiser:
 		## (3) Find the max-area contour
 		cnts = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
 		cnt = sorted(cnts, key=cv2.contourArea, reverse=True)
-		for idx in range(len(cnt)):
+		rois = []
+		for idx in range(len(cnt[0:2])):
 			x,y,w,h = cv2.boundingRect(cnt[idx])
 			if w*h / imgArea < minArea / 100:
 				continue
-			dst = img[y:y+h, x:x+w]
-			cv2.imwrite('out/crop{}.png'.format(idx), dst)
+			roi = img[y:y+h, x:x+w]
+			rois.append(roi)
+			#cv2.imwrite('out/crop{}.png'.format(idx), roi)
 
-		return
+		if len(rois) != 0:
+			(minH, minW) = rois[-1].shape
+			img = np.vstack([Image.fromarray(roi).resize((minW, minH)) for roi in rois])
+			#cv2.imwrite('out/crop100.png', img)
+		return img
 
 	###############################################
 	def gradient(self, img, kernelSize):
 		kernel = np.ones((kernelSize,kernelSize),np.uint8)
 		img = cv2.morphologyEx(img, cv2.MORPH_GRADIENT, kernel)
 		return img
+
+	###############################################
+	def wavelet(self, img, sigma=None):
+		return denoise_wavelet(img, sigma)
 
 	###############################################
 	def sharpen(self, img, sharpenImg=1.5, blurImg=-0.5):
@@ -262,6 +306,11 @@ class Denoiser:
 	def erosion(self, img, eKernel,eIterations):
 		eKernel = np.ones((eKernel, eKernel), np.uint8)
 		return cv2.erode(img, eKernel, eIterations)
+
+	###############################################
+	def dilation(self, img, dKernel,dIterations):
+		dKernel = np.ones((dKernel, dKernel), np.uint8)
+		return cv2.dilate(img, dKernel, dIterations)
 
 	###############################################
 	def cropTextBbox(self, img):
@@ -326,7 +375,7 @@ class Denoiser:
 	    norm_img = np.empty(diff_img.shape)
 	    norm_img = cv2.normalize(diff_img, dst=norm_img, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1) # Normalize pixels
 	    
-	    return diff_img
+	    return norm_img
 
 	###############################################
 	def blur(self, img, method, kernelSize=3):
