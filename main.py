@@ -13,19 +13,29 @@ import pdb
 def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--i', help="path to input image", default="test2.png")
+	parser.add_argument('--d', help="display denoised image", default=None)
 	parser.add_argument('--o', help="save binarized image", default=None)
 	args = parser.parse_args()
 
 	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
 	denoiser = Denoiser()
-	denoiser.denoise(img)
-	
-	denoised = denoiser.denoise(img, userconfig=True)
-	if True:
-		display(img, denoised, True)
+	auto_denoised = denoiser.denoise(img, userconfig=False)
+	user_denoised = denoiser.denoise(img, userconfig=True)
+
+	if args.d == 'both':
+		display(img, auto_denoised, True)
+		display(img, user_denoised, True)
+
+	elif args.d == 'auto':
+		display(img, auto_denoised, True)
+
+	elif args.d == 'user':
+		display(img, user_denoised, True)
 
 	if args.o:
 		cv2.imwrite('out/' + args.o, denoised)
+
+	print(np.array_equal(auto_denoised, user_denoised))
 
 def display(img, denoised, hist=False):
 	plt.rcParams["figure.figsize"] = [12, 9]
@@ -74,7 +84,7 @@ class Denoiser:
 			img = self.closing(img, self.config['CLOSING KERNEL SIZE'])
 
 		if self.config['BLUR']:
-			img = self.blur(img, 'bilateral')
+			img = self.blur(img, self.config['BLURRING METHOD'])
 
 		if self.config['OPENING']:
 			img = self.opening(img, self.config['OPENING KERNEL SIZE'])
@@ -91,7 +101,7 @@ class Denoiser:
 			img = self.binarize(img, self.config['BINARIZATION METHOD'])
 
 		if self.config['CROPTEXT']:
-			img = self.cropTextBbox(img)
+			img = self.cropText(img)
 
 		return img
 
@@ -227,13 +237,23 @@ class Denoiser:
 
 		if self.percentageBlack(img) > 40: # img likely has high density of pepper noise
 			f.write('CLOSING T 3\n')
+			img = self.closing(img, 3)
 
 		if self.percentageBlack(img) > 15: # img has moderate density of pepper noise
-			f.write('BLUR T 12 2\n') # median blur
+			f.write('BLUR T 12 3\n') # bilateral blur
 			f.write('BINARIZE T 2\n') # Otsu binarization
+			img = self.blur(img, 'bilateral', 12)
+			img = self.binarize(img, 'otsu')
 
 		f.write('CROPTEXT T\n')
+		img = self.cropText(img)
+
+		#if not self.is_binary(img):
+		#	f.write('BINARIZE T 2\n')
+		#	img = self.binarize(img, 'otsu')
+		
 		f.close()
+		return img
 
 	###############################################
 	def binarize(self, img, method='otsu', gthreshold=127):
@@ -314,7 +334,7 @@ class Denoiser:
 		return cv2.dilate(img, dKernel, dIterations)
 
 	###############################################
-	def cropTextBbox(self, img):
+	def cropText(self, img):
 		'Finds the texts in img and returns an image with the texts against a white background'
 		rgb = cv2.pyrDown(img)
 
@@ -327,7 +347,7 @@ class Denoiser:
 		connected = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
 
 		# using RETR_EXTERNAL instead of RETR_CCOMP
-		contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+		contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 		#For opencv 3+ comment the previous line and uncomment the following line
 		#_, contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
@@ -384,6 +404,7 @@ class Denoiser:
 			img = cv2.blur(img, (kernelSize, kernelSize))
 
 		elif method == 'median':
+			print(kernelSize)
 			img = cv2.medianBlur(img, kernelSize)
 
 		elif method == 'gaussian':
