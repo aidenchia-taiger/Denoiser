@@ -13,27 +13,21 @@ import pdb
 def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--i', help="path to input image", default="test2.png")
-	parser.add_argument('--d', help="display denoised image", default=None)
+	parser.add_argument('--d', help="display denoised image", action='store_true')
 	parser.add_argument('--o', help="save binarized image", default=None)
 	args = parser.parse_args()
 
-	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
 	denoiser = Denoiser()
-	auto_denoised = denoiser.denoise(img, userconfig=False)
-	user_denoised = denoiser.denoise(img, userconfig=True)
+	auto_denoised = denoiser.denoise(args.i, userconfig=False)
+	user_denoised = denoiser.denoise(args.i, userconfig=True)
 
-	if args.d == 'both':
+	if args.d:
 		display(img, auto_denoised, True)
-		display(img, user_denoised, True)
-
-	elif args.d == 'auto':
-		display(img, auto_denoised, True)
-
-	elif args.d == 'user':
 		display(img, user_denoised, True)
 
 	if args.o:
-		cv2.imwrite('out/' + args.o, denoised)
+		cv2.imwrite('out/{}_auto.png'.format(args.o), auto_denoised)
+		cv2.imwrite('out/{}_user.png'.format(args.o), user_denoised)
 
 	print(np.array_equal(auto_denoised, user_denoised))
 
@@ -57,6 +51,7 @@ def display(img, denoised, hist=False):
 	plt.show()
 
 class Denoiser:
+
 	def denoise_by_user_config(self, img):
 		self.config = self.read_config(open('userconfig.txt'))
 		if self.config['DESHADOW']:
@@ -102,6 +97,9 @@ class Denoiser:
 
 		if self.config['CROPTEXT']:
 			img = self.cropText(img)
+
+		if self.config['BINARIZE']:
+			img = self.binarize(img, self.config['BINARIZATION METHOD'])
 
 		return img
 
@@ -200,6 +198,15 @@ class Denoiser:
 				dic['CONTRAST METHOD'] = 'global' if line[2] == str(0) else 'adaptive'
 				self.printIfTrue(line[0], dic, 'CONTRAST METHOD')
 
+			elif line[0] == 'CROPTEXT':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['CROPTEXT SIZE THRESHOLD'] = float(line[2])
+				dic['CROPTEXT WIDTH THRESHOLD'] = float(line[3])
+				dic['CROPTEXT HEIGHT THRESHOLD'] = float(line[4])
+				self.printIfTrue(line[0], dic, 'CROPTEXT SIZE THRESHOLD', \
+											   'CROPTEXT WIDTH THRESHOLD', \
+											   'CROPTEXT HEIGHT THRESHOLD')
+
 			else:
 				dic[line[0]] = True if line[1] == 'T' else False
 				self.printIfTrue(line[0], dic)
@@ -221,36 +228,41 @@ class Denoiser:
 		numWhite = (img == 255).sum()
 		return numBlack * 100 / numWhite
 
-	def denoise(self, img, userconfig=False):
+	def denoise(self, imgpath, userconfig=False):
+		img = cv2.imread(imgpath, cv2.IMREAD_GRAYSCALE)
+
 		if userconfig:
 			return self.denoise_by_user_config(img)
 
+		# Write pipeline to config file so user knows what modules were applied
 		f = open('config.txt', 'w+')
 
 		'TODO: if (shadow): deshadow'
 		'TODO: how to distinguish other bg object?'
 		'TODO: how to remove black border?'
 
+		print('[INFO] Percentage Black: {}'.format(self.percentageBlack(img)))
+
 		if 100 - self.percentageBlack(img) > 55: # there is likely a large white border surrounding area of interest
 			f.write('CROPBACKGROUND T 5\n')
-			img = self.cropBackground(img)
+			img = self.cropBackground(img, 5)
 
-		if self.percentageBlack(img) > 40: # img likely has high density of pepper noise
-			f.write('CLOSING T 3\n')
-			img = self.closing(img, 3)
+		if imgpath[-3:] == 'tif': # tif files need to apply closing
+			f.write('CLOSING T 2\n')
+			img = self.closing(img, 2)
 
 		if self.percentageBlack(img) > 15: # img has moderate density of pepper noise
-			f.write('BLUR T 12 3\n') # bilateral blur
-			f.write('BINARIZE T 2\n') # Otsu binarization
+			f.write('BLUR T 12 3\n')
+			f.write('BINARIZE T 2\n') 
 			img = self.blur(img, 'bilateral', 12)
 			img = self.binarize(img, 'otsu')
 
-		f.write('CROPTEXT T\n')
+		f.write('CROPTEXT T 0.35 8 8\n')
 		img = self.cropText(img)
 
-		#if not self.is_binary(img):
-		#	f.write('BINARIZE T 2\n')
-		#	img = self.binarize(img, 'otsu')
+		if not self.is_binary(img):
+			f.write('BINARIZE T 2\n')
+			img = self.binarize(img, 'otsu', 21)
 		
 		f.close()
 		return img
@@ -269,9 +281,6 @@ class Denoiser:
 		elif method == 'otsu':
 			_, img = cv2.threshold(img, 0, 255, cv2.THRESH_OTSU)
 
-		elif method == 'inv':
-			_, img = cv2.threshold(img, 10, 255, cv2.THRESH_BINARY_INV)
-
 		return img
 
 	###############################################
@@ -287,7 +296,7 @@ class Denoiser:
 		cnts = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
 		cnt = sorted(cnts, key=cv2.contourArea, reverse=True)
 		rois = []
-		for idx in range(len(cnt[0:2])):
+		for idx in range(len(cnt)):
 			x,y,w,h = cv2.boundingRect(cnt[idx])
 			if w*h / imgArea < minArea / 100:
 				continue
@@ -334,22 +343,20 @@ class Denoiser:
 		return cv2.dilate(img, dKernel, dIterations)
 
 	###############################################
-	def cropText(self, img):
+	def cropText(self, img, sizeThresh=0.35, widthThresh=8, heightThresh=8):
 		'Finds the texts in img and returns an image with the texts against a white background'
 		rgb = cv2.pyrDown(img)
-
 		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 		grad = cv2.morphologyEx(rgb, cv2.MORPH_GRADIENT, kernel)
 
 		_, bw = cv2.threshold(grad, 0.0, 255.0, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-		#cv2.imwrite('grad.png', grad)
 		kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1))
 		connected = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
 
 		# using RETR_EXTERNAL instead of RETR_CCOMP
-		contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+		contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 		#For opencv 3+ comment the previous line and uncomment the following line
-		#_, contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+		#_, contours, hierarchy = cv2.findContours(connected.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
 		mask = np.zeros(bw.shape, dtype=np.uint8)
 		white = np.zeros_like(rgb)
@@ -362,13 +369,15 @@ class Denoiser:
 
 		for idx in range(len(contours)):
 		    x, y, w, h = cv2.boundingRect(contours[idx])
-		    mask[y:y+h, x:x+w] = 0
 		    cv2.drawContours(mask, contours, idx, (255, 255, 255), -1)
-		    r = float(cv2.countNonZero(mask[y:y+h, x:x+w])) / (w * h)
+		    aspectRatio = float(w / h)
+		    r = float(cv2.countNonZero(mask[y:y+h, x:x+w])) / (w * h) # the 'size' of the contour / area of contour 
 
-		    if r > 0.45 and w > 8 and h > 8:
-		        cv2.rectangle(rgb, (x, y), (x+w-1, y+h-1), (255, 255, 255), 2)
+		    if r > sizeThresh and w > widthThresh and h > heightThresh:
+		        #cv2.rectangle(rgb, (x, y), (x+w-1, y+h-1), (255, 255, 255), 2)
 		        out = rgb[y:y+h, x:x+w]
+		        #plt.imshow(out, 'gray')
+		        #plt.show()
 		        white[y:y+h, x:x+w] = out
 
 		#cv2.imwrite('cropped2.png', white)
