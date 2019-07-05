@@ -17,6 +17,7 @@ def main():
 	parser.add_argument('--o', help="save binarized image", default=None)
 	args = parser.parse_args()
 
+	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
 	denoiser = Denoiser()
 	auto_denoised = denoiser.denoise(args.i, userconfig=False)
 	user_denoised = denoiser.denoise(args.i, userconfig=True)
