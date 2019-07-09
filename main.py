@@ -9,6 +9,8 @@ from skimage.restoration import denoise_wavelet
 from scipy.signal import convolve2d
 import math
 import pdb
+from Utils import display, save
+import Utils
 
 def main():
 	parser = argparse.ArgumentParser()
@@ -58,11 +60,14 @@ class Denoiser:
 		if self.config['DESHADOW']:
 			img = self.deshadow(img, self.config['MAX KERNEL'], self.config['MEDIAN KERNEL'])
 
-		if self.config['CONTRAST']:
-			img = self.increaseContrast(img)
-
 		if self.config['CROPBACKGROUND']:
 			img = self.cropBackground(img, self.config['MIN AREA PERCENTAGE'])
+
+		if self.config['GAMMATRANSFORM']:
+			img = self.gammaTransform(img, self.config['GAMMA'])
+
+		if self.config['CONTRAST']:
+			img = self.increaseContrast(img, self.config['CONTRAST METHOD'])
 
 		if self.config['SHARPEN']:
 			img = self.sharpen(img)
@@ -199,6 +204,11 @@ class Denoiser:
 				dic['CONTRAST METHOD'] = 'global' if line[2] == str(0) else 'adaptive'
 				self.printIfTrue(line[0], dic, 'CONTRAST METHOD')
 
+			elif line[0] == 'GAMMATRANSFORM':
+				dic[line[0]] = True if line[1] == 'T' else False
+				dic['GAMMA'] = float(line[2])
+				self.printIfTrue(line[0], dic, 'GAMMA')
+
 			elif line[0] == 'CROPTEXT':
 				dic[line[0]] = True if line[1] == 'T' else False
 				dic['CROPTEXT SIZE THRESHOLD'] = float(line[2])
@@ -229,6 +239,10 @@ class Denoiser:
 		numWhite = (img == 255).sum()
 		return numBlack * 100 / numWhite
 
+	def getBrightness(self, img):
+		brightness = np.sum(img, axis=None) / img.size
+		return brightness
+
 	def denoise(self, imgpath, userconfig=False):
 		img = cv2.imread(imgpath, cv2.IMREAD_GRAYSCALE)
 
@@ -242,13 +256,17 @@ class Denoiser:
 		'TODO: how to distinguish other bg object?'
 		'TODO: how to remove black border?'
 
-		print('[INFO] Percentage Black: {}'.format(self.percentageBlack(img)))
+		print('[INFO] Percentage Black: {:.2f}%'.format(self.percentageBlack(img)))
+		print('[INFO] Brightness: {}'.format(int(self.getBrightness(img))))
+
 
 		if 100 - self.percentageBlack(img) > 55: # there is likely a large white border surrounding area of interest
 			f.write('CROPBACKGROUND T 5\n')
 			img = self.cropBackground(img, 5)
 
-		if imgpath[-3:] == 'tif': # tif files need to apply closing
+		print('[INFO] Brightness: {}'.format(int(self.getBrightness(img))))
+
+		if self.percentageBlack(img) > 30: # tif files need to apply closing
 			f.write('CLOSING T 2\n')
 			img = self.closing(img, 2)
 
@@ -263,7 +281,7 @@ class Denoiser:
 
 		if not self.is_binary(img):
 			f.write('BINARIZE T 2\n')
-			img = self.binarize(img, 'otsu', 21)
+			img = self.binarize(img, 'otsu', 3)
 		
 		f.close()
 		return img
@@ -277,7 +295,7 @@ class Denoiser:
 		elif method == 'adaptive':
 			img = cv2.adaptiveThreshold(src=img, dst=img, maxValue=255, \
 										adaptiveMethod=cv2.ADAPTIVE_THRESH_GAUSSIAN_C, \
-								   		thresholdType=cv2.THRESH_BINARY, blockSize=21, C=2)
+								   		thresholdType=cv2.THRESH_BINARY, blockSize=9, C=2)
 
 		elif method == 'otsu':
 			_, img = cv2.threshold(img, 0, 255, cv2.THRESH_OTSU)
@@ -297,24 +315,49 @@ class Denoiser:
 		cnts = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
 		cnt = sorted(cnts, key=cv2.contourArea, reverse=True)
 		rois = []
-		for idx in range(len(cnt)):
+		maxW = 0
+		maxH = 0
+		for idx in range(len(cnt[0:2])): # get the front and back of the IC
 			x,y,w,h = cv2.boundingRect(cnt[idx])
 			if w*h / imgArea < minArea / 100:
 				continue
+
+			if w > maxW:
+				maxW = w 
+			
+			if h > maxH:
+				maxH = h
+		
 			roi = img[y:y+h, x:x+w]
 			rois.append(roi)
 			#cv2.imwrite('out/crop{}.png'.format(idx), roi)
 
 		if len(rois) != 0:
-			(minH, minW) = rois[-1].shape
-			img = np.vstack([Image.fromarray(roi).resize((minW, minH)) for roi in rois])
+			for i, roi in enumerate(rois):
+				h, w = roi.shape 
+				mask = np.ones([maxH, maxW]) * 255
+				mask[0:h, 0:w] = roi
+				if i == 0:
+					img = mask
+				else:
+					img = np.concatenate((img, mask), axis=0)
+			
 			#cv2.imwrite('out/crop100.png', img)
+		img = img.astype(np.uint8) # convert to suitable format for OpenCV
 		return img
 
 	###############################################
 	def gradient(self, img, kernelSize):
 		kernel = np.ones((kernelSize,kernelSize),np.uint8)
 		img = cv2.morphologyEx(img, cv2.MORPH_GRADIENT, kernel)
+		return img
+
+	###############################################
+	def gammaTransform(self, img, gamma):
+		lut = np.empty((1,256), np.uint8)
+		for i in range(256):
+			lut[0,i] = np.clip(pow(i / 255.0, gamma) * 255.0, 0, 255)
+		img = cv2.LUT(img, lut)
 		return img
 
 	###############################################
@@ -377,8 +420,7 @@ class Denoiser:
 		    if r > sizeThresh and w > widthThresh and h > heightThresh:
 		        #cv2.rectangle(rgb, (x, y), (x+w-1, y+h-1), (255, 255, 255), 2)
 		        out = rgb[y:y+h, x:x+w]
-		        #plt.imshow(out, 'gray')
-		        #plt.show()
+		        #Utils.display(out)
 		        white[y:y+h, x:x+w] = out
 
 		#cv2.imwrite('cropped2.png', white)
