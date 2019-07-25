@@ -12,8 +12,22 @@ import pdb
 from Utils import display, save
 
 class Denoiser:
+    """
+    This Denoiser is made up of many modules that make use of OpenCV morphological operations in order to denoise a document image
+    as best as possible as a preprocessing step before feeding the doc image into an OCR engine like Tesseract / ABBYY.
+
+    This denoiser can be used in two ways:
+
+    1) The user can specify the exact operations to apply as well as the values of the parameters of individual operations 
+       in the userconfig.txt file. For example, in the userconfig.txt file, the first line is 'CROPTEXT T 0.35 8 8'. This means
+       that the croptext. This is defined in the denoise_by_user_config(self, img) function.
+
+    2) Otherwise, the denoiser can automatically figure out what denoising operations to apply on the image by using some
+       simple rules to estimate the amount of noise in the document image. This is defined in the denoise(self, imgpath, userconfig) function.
+    """
 
     def denoise(self, imgpath, userconfig=False):
+
         img = cv2.imread(imgpath, cv2.IMREAD_GRAYSCALE)
 
         if userconfig:

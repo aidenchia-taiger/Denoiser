@@ -9,11 +9,35 @@ import pdb
 from Utils import display, save
 from Denoiser import Denoiser
 
+'TODO: Convert userconfig.txt file to json file'
+
 def main():
+	"""
+	This Denoiser is made up of many modules that make use of OpenCV morphological operations in order to denoise a document image
+	as best as possible as a preprocessing step before feeding the doc image into an OCR engine like Tesseract / ABBYY.
+
+	This denoiser can be used in two ways:
+	
+	1) The user can specify the exact operations to apply as well as the values of the parameters of individual operations 
+	   in the userconfig.txt file. For example, in the userconfig.txt file, the first line is 'CROPTEXT T 0.35 8 8'. This means
+	   that the croptext
+
+	2) Otherwise, the denoiser can automatically figure out what denoising operations to apply on the image by using some
+	   simple rules to estimate the amount of noise in the document image.
+
+	By specifying the --d command line argument, this main() function will first display a window showing the before and after
+	effect of applying the 'automatically' denoised output. It will then open up another window showing the before and after
+	effect of applying the 'user' denoised output.
+
+	By specifying the --o command line argument, the denoised images will be written to ../out.
+
+	Example usage:
+		python3 main.py --i imgs/guanSoon.png --d --o
+	"""
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--i', help="path to input image", default="test.png")
 	parser.add_argument('--d', help="display denoised image", action='store_true')
-	parser.add_argument('--o', help="save binarized image", default=None)
+	parser.add_argument('--o', help="save denoised image", default=None)
 	args = parser.parse_args()
 
 	img = cv2.imread(args.i, cv2.IMREAD_GRAYSCALE)
